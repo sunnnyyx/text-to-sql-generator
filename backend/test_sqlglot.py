@@ -60,3 +60,22 @@ for query in schema_test_queries:
     except Exception as e:
         print("  RESULT: ❌ BLOCKED —", e)
     print()
+
+
+
+    print("=" * 50)
+print("TIMEOUT TEST")
+from sqlalchemy import create_engine, text
+
+readonly_engine = create_engine(
+    os.getenv("READONLY_DATABASE_URL"),
+    connect_args={"options": "-c statement_timeout=2000"},
+)
+
+try:
+    with readonly_engine.connect() as conn:
+        # pg_sleep(3) simulates a query that takes 3 seconds — longer than our 2s timeout
+        conn.execute(text("SELECT pg_sleep(3)"))
+    print("  RESULT: Query completed (unexpected — timeout should have fired)")
+except Exception as e:
+    print("  RESULT: ✅ Query correctly timed out —", type(e).__name__)
