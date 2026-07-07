@@ -2,6 +2,7 @@ import os
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from sqlalchemy import create_engine, text
+from schema_service import get_schema
 
 load_dotenv()
 
@@ -19,3 +20,7 @@ def db_check():
     with engine.connect() as conn:
         result = conn.execute(text("SELECT 1"))
         return {"database_connected": True, "result": result.scalar()}
+    
+@app.get("/schema")
+def schema():
+    return get_schema(engine)
