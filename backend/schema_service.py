@@ -39,3 +39,27 @@ def get_schema(engine: Engine) -> list[dict]:
         })
 
     return schema
+
+def format_schema_for_prompt(schema: list[dict]) -> str:
+    """
+    Converts the schema (from get_schema) into a compact,
+    LLM-friendly pseudo-DDL string for use in prompts.
+    """
+    lines = []
+
+    for table in schema:
+        lines.append(f"Table: {table['table']}")
+        for col in table["columns"]:
+            pk_marker = " [PK]" if col["name"] in table["primary_keys"] else ""
+            lines.append(f"  - {col['name']} ({col['type']}){pk_marker}")
+
+        for fk in table["foreign_keys"]:
+            fk_col = fk["column"][0] if fk["column"] else "?"
+            ref_col = fk["references_column"][0] if fk["references_column"] else "?"
+            lines.append(
+                f"  FOREIGN KEY: {fk_col} -> {fk['references_table']}.{ref_col}"
+            )
+
+        lines.append("")  # blank line between tables
+
+    return "\n".join(lines)
