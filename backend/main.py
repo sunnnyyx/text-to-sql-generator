@@ -9,6 +9,7 @@ from sql_generator import generate_sql, SQLGenerationError
 from fastapi import HTTPException
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError, DBAPIError
+from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
@@ -26,6 +27,13 @@ readonly_engine = create_engine(
 
 app = FastAPI()
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 def enforce_row_limit(sql: str, max_rows: int = 100) -> str:
     """
