@@ -10,7 +10,6 @@ from fastapi import HTTPException
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError, DBAPIError
 from fastapi.middleware.cors import CORSMiddleware
-import time
 
 load_dotenv()
 
@@ -18,10 +17,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 
 READONLY_DATABASE_URL = os.getenv("READONLY_DATABASE_URL")
-readonly_engine = create_engine(
-    READONLY_DATABASE_URL,
-    connect_args={"options": "-c statement_timeout=25000"},
-)
+readonly_engine = create_engine(READONLY_DATABASE_URL)
 
 app = FastAPI()
 
