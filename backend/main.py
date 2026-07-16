@@ -22,7 +22,7 @@ engine = create_engine(DATABASE_URL)
 READONLY_DATABASE_URL = os.getenv("READONLY_DATABASE_URL")
 readonly_engine = create_engine(
     READONLY_DATABASE_URL,
-    connect_args={"options": "-c statement_timeout=5000"},
+    connect_args={"options": "-c statement_timeout=15000"},
 )
 
 app = FastAPI()
