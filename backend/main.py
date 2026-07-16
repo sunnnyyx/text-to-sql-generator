@@ -68,6 +68,7 @@ def generate_sql_endpoint(request: QuestionRequest):
         result = generate_sql(engine, request.question)
     except SQLGenerationError as e:
         raise HTTPException(status_code=422, detail=str(e))
+
     t1 = time.time()
     print(f"LLM generation took {t1 - t0:.2f}s")
 
@@ -77,15 +78,27 @@ def generate_sql_endpoint(request: QuestionRequest):
         with readonly_engine.connect() as conn:
             t2 = time.time()
             print(f"DB connection took {t2 - t1:.2f}s")
+
+            # Set a 25-second timeout for this connection
+            conn.execute(text("SET statement_timeout = 25000"))
+
             query_result = conn.execute(text(limited_sql))
             columns = list(query_result.keys())
             rows = [list(row) for row in query_result.fetchall()]
+
             t3 = time.time()
             print(f"Query execution took {t3 - t2:.2f}s")
+
     except OperationalError as e:
-        raise HTTPException(status_code=504, detail="The query took too long to execute and was cancelled.")
+        raise HTTPException(
+            status_code=504,
+            detail="The query took too long to execute and was cancelled."
+        )
     except DBAPIError as e:
-        raise HTTPException(status_code=500, detail="The database encountered an error executing this query.")
+        raise HTTPException(
+            status_code=500,
+            detail="The database encountered an error executing this query."
+        )
 
     return {
         "sql": result["sql"],
