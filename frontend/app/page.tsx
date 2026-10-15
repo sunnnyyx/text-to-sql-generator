@@ -1,32 +1,34 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import QueryComposer from "./components/QueryComposer";
+import ResultsTable from "./components/ResultsTable";
+import SchemaPanel from "./components/SchemaPanel";
+import SqlPanel from "./components/SqlPanel";
+import { ApiError, fetchSchema, generateSql } from "./lib/api";
+import type { QueryResult, Table } from "./types";
 
-interface Column {
-  name: string;
-  type: string;
-  nullable: boolean;
+interface QueryFailure {
+  title: string;
+  message: string;
 }
 
-interface ForeignKey {
-  column: string[];
-  references_table: string;
-  references_column: string[];
-}
-
-interface Table {
-  table: string;
-  columns: Column[];
-  primary_keys: string[];
-  foreign_keys: ForeignKey[];
-}
-
-interface QueryResult {
-  sql: string;
-  explanation: string;
-  columns: string[];
-  rows: (string | number | null)[][];
-  row_count: number;
+// Status codes come from backend/main.py: 422 = SQL generation failed, 504 = timeout, 500 = any server-side failure
+// (including LLM generation, so the wording stays neutral).
+function describeFailure(err: unknown): QueryFailure {
+  if (!(err instanceof ApiError)) {
+    return { title: "Request failed", message: "Something went wrong. Please try again." };
+  }
+  switch (err.status) {
+    case 422:
+      return { title: "Could not generate a valid query", message: err.message };
+    case 504:
+      return { title: "The query timed out", message: err.message };
+    case 500:
+      return { title: "The request failed on the server.", message: err.message };
+    default:
+      return { title: "Request failed", message: err.message };
+  }
 }
 
 export default function Home() {
@@ -35,186 +37,126 @@ export default function Home() {
   const [schemaError, setSchemaError] = useState<string | null>(null);
 
   const [question, setQuestion] = useState("");
+  const [validationError, setValidationError] = useState<string | null>(null);
   const [queryLoading, setQueryLoading] = useState(false);
-  const [queryError, setQueryError] = useState<string | null>(null);
+  const [queryFailure, setQueryFailure] = useState<QueryFailure | null>(null);
   const [queryResult, setQueryResult] = useState<QueryResult | null>(null);
 
+  const inputRef = useRef<HTMLInputElement>(null);
+  // Set synchronously so a fast double-submit cannot start a second request before the disabled state renders.
+  const requestInFlight = useRef(false);
+
   useEffect(() => {
-    fetch(`${process.env.NEXT_PUBLIC_API_URL}/schema`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`Request failed: ${res.status}`);
-        return res.json();
+    let cancelled = false;
+    fetchSchema()
+      .then((tables) => {
+        if (!cancelled) setSchema(tables);
       })
-      .then((data) => setSchema(data))
-      .catch((err) => setSchemaError(err.message))
-      .finally(() => setSchemaLoading(false));
+      .catch((err: unknown) => {
+        if (!cancelled) setSchemaError(err instanceof Error ? err.message : "Unknown error");
+      })
+      .finally(() => {
+        if (!cancelled) setSchemaLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!question.trim()) return;
+  function handleQuestionChange(value: string) {
+    setQuestion(value);
+    if (validationError) setValidationError(null);
+  }
 
+  async function handleSubmit() {
+    if (requestInFlight.current) return;
+
+    const trimmed = question.trim();
+    if (!trimmed) {
+      setValidationError("Enter a question before generating SQL.");
+      inputRef.current?.focus();
+      return;
+    }
+
+    requestInFlight.current = true;
+    setValidationError(null);
     setQueryLoading(true);
-    setQueryError(null);
+    setQueryFailure(null);
     setQueryResult(null);
 
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/generate-sql`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.detail || `Request failed: ${res.status}`);
-      }
-
-      setQueryResult(data);
+      const result = await generateSql(trimmed);
+      setQueryResult(result);
     } catch (err) {
-      setQueryError(err instanceof Error ? err.message : "Unknown error");
+      setQueryFailure(describeFailure(err));
     } finally {
+      requestInFlight.current = false;
       setQueryLoading(false);
     }
   }
 
   return (
-    <main className="min-h-screen bg-gray-50 p-8">
-      <h1 className="text-2xl font-bold mb-6">Text-to-SQL Generator</h1>
+    <div className="min-h-screen bg-slate-100 text-slate-900">
+      <header className="border-b border-slate-200 bg-white">
+        <div className="mx-auto flex max-w-7xl items-center gap-3 px-4 py-4 sm:px-6">
+          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-indigo-600 font-mono text-xs font-bold text-white">
+            SQL
+          </div>
+          <div className="min-w-0">
+            <h1 className="text-base font-semibold leading-tight">Text-to-SQL Generator</h1>
+            <p className="text-xs text-slate-500">
+              Ask in plain English. Read-only, validated SQL runs against the live database.
+            </p>
+          </div>
+        </div>
+      </header>
 
-      <section className="mb-10">
-        <h2 className="text-lg font-semibold mb-3">Database Schema</h2>
+      <main className="mx-auto grid max-w-7xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[minmax(260px,340px)_minmax(0,1fr)] lg:items-start">
+        <div className="order-2 lg:order-1">
+          <SchemaPanel schema={schema} loading={schemaLoading} error={schemaError} />
+        </div>
 
-        {schemaLoading && <p className="text-gray-500">Loading schema...</p>}
-        {schemaError && <p className="text-red-600">Error: {schemaError}</p>}
+        <div className="order-1 flex min-w-0 flex-col gap-8 lg:order-2">
+          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+            <QueryComposer
+              schema={schema}
+              question={question}
+              onQuestionChange={handleQuestionChange}
+              onSubmit={handleSubmit}
+              loading={queryLoading}
+              validationError={validationError}
+              inputRef={inputRef}
+            />
+          </div>
 
-        {!schemaLoading && !schemaError && (
-          <div className="grid gap-4 md:grid-cols-2">
-            {schema.map((table) => (
-              <div
-                key={table.table}
-                className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm"
-              >
-                <h3 className="font-mono font-semibold text-blue-700 mb-2">
-                  {table.table}
-                </h3>
-                <ul className="text-sm space-y-1">
-                  {table.columns.map((col) => (
-                    <li key={col.name} className="font-mono">
-                      {col.name}{" "}
-                      <span className="text-gray-400">({col.type})</span>
-                      {table.primary_keys.includes(col.name) && (
-                        <span className="text-xs text-amber-600 ml-1">
-                          PK
-                        </span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-                {table.foreign_keys.map((fk, i) => (
-                  <p key={i} className="text-xs text-gray-500 mt-2">
-                    FK: {fk.column[0]} → {fk.references_table}.
-                    {fk.references_column[0]}
-                  </p>
-                ))}
+          {queryLoading && (
+            <p role="status" className="text-sm text-slate-600">
+              Generating SQL, validating it, and running it against the database…
+            </p>
+          )}
+
+          {queryFailure && (
+            <div
+              role="alert"
+              className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900"
+            >
+              <p className="font-semibold">{queryFailure.title}</p>
+              <p className="mt-1 text-red-800">{queryFailure.message}</p>
+            </div>
+          )}
+
+          {queryResult && (
+            <>
+              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+                <SqlPanel sql={queryResult.sql} explanation={queryResult.explanation} />
               </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      <section>
-        <h2 className="text-lg font-semibold mb-3">Ask a Question</h2>
-
-        <form onSubmit={handleSubmit} className="flex gap-2 mb-4">
-          <input
-            type="text"
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            placeholder="e.g. How many orders has each customer placed?"
-            className="flex-1 border border-gray-300 rounded-md px-3 py-2 text-sm"
-          />
-          <button
-            type="submit"
-            disabled={queryLoading}
-            className="bg-blue-600 text-white px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50"
-          >
-            {queryLoading ? "Generating..." : "Submit"}
-          </button>
-        </form>
-
-        {queryError && (
-          <p className="text-red-600 text-sm mb-4">Error: {queryError}</p>
-        )}
-
-        {queryResult && (
-          <div className="space-y-4">
-            <div>
-              <h3 className="text-sm font-semibold text-gray-600 mb-1">
-                Generated SQL
-              </h3>
-              <pre className="bg-gray-900 text-green-400 rounded-lg p-4 text-sm overflow-auto font-mono">
-                {queryResult.sql}
-              </pre>
-            </div>
-
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-900">
-              {queryResult.explanation}
-            </div>
-
-            <div>
-              <h3 className="text-sm font-semibold text-gray-600 mb-1">
-                Results ({queryResult.row_count}{" "}
-                {queryResult.row_count === 1 ? "row" : "rows"})
-              </h3>
-
-              {queryResult.row_count === 0 ? (
-                <p className="text-gray-500 text-sm italic">
-                  No matching data found.
-                </p>
-              ) : (
-                <div className="overflow-auto border border-gray-200 rounded-lg">
-                  <table className="min-w-full text-sm">
-                    <thead className="bg-gray-100">
-                      <tr>
-                        {queryResult.columns.map((col) => (
-                          <th
-                            key={col}
-                            className="text-left px-3 py-2 font-semibold text-gray-700"
-                          >
-                            {col}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {queryResult.rows.map((row, i) => (
-                        <tr
-                          key={i}
-                          className="border-t border-gray-100 even:bg-gray-50"
-                        >
-                          {row.map((cell, j) => (
-                            <td key={j} className="px-3 py-2">
-                              {cell === null ? (
-                                <span className="text-gray-400 italic">
-                                  null
-                                </span>
-                              ) : (
-                                String(cell)
-                              )}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </section>
-    </main>
+              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+                <ResultsTable columns={queryResult.columns} rows={queryResult.rows} />
+              </div>
+            </>
+          )}
+        </div>
+      </main>
+    </div>
   );
 }
